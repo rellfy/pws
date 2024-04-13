@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use url::Url;
+pub use url::Url;
 
 const INITIAL_BACKOFF_MILLIS: u64 = 100;
 const MAX_BACKOFF_MILLIS: u64 = 5 * 60 * 1000;
@@ -36,12 +36,9 @@ pub enum Error {
 pub type WsMessageSender = broadcast::Sender<Message>;
 pub type WsMessageReceiver = broadcast::Receiver<Message>;
 
-pub async fn connect_persistent_websocket_async<T>(
-    url: T,
-) -> Result<(WsMessageSender, WsMessageReceiver), Error>
-where
-    T: Into<Url>,
-{
+pub async fn connect_persistent_websocket_async(
+    url: Url,
+) -> Result<(WsMessageSender, WsMessageReceiver), Error> {
     let (msg_tx, msg_rx) = broadcast::channel::<Message>(CHANNEL_CAPACITY);
     let (first_conn_tx, first_conn_rx) = oneshot::channel();
     tokio::spawn(setup_persistent_websocket(
