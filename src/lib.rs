@@ -8,7 +8,7 @@ use tokio::sync::broadcast::error::{RecvError as BroadcastRecvError, SendError};
 use tokio::sync::oneshot::error::RecvError as OneshotRecvError;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinError;
-use tokio_tungstenite::tungstenite::Message;
+pub use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 pub use url::Url;
 
