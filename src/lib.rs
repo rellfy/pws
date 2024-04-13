@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::error::{RecvError as BroadcastRecvError, SendError};
 use tokio::sync::oneshot::error::RecvError as OneshotRecvError;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinError;
 pub use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -33,39 +33,44 @@ pub enum Error {
     Send(SendError<Message>),
 }
 
-pub type WsMessageSender = broadcast::Sender<Message>;
+pub type WsMessageSender = mpsc::Sender<Message>;
 pub type WsMessageReceiver = broadcast::Receiver<Message>;
 
 pub async fn connect_persistent_websocket_async(
     url: Url,
 ) -> Result<(WsMessageSender, WsMessageReceiver), Error> {
-    let (msg_tx, msg_rx) = broadcast::channel::<Message>(CHANNEL_CAPACITY);
+    let (msg_tx_out, msg_rx_out) = mpsc::channel::<Message>(CHANNEL_CAPACITY);
+    let (msg_tx_in, msg_rx_in) = broadcast::channel::<Message>(CHANNEL_CAPACITY);
     let (first_conn_tx, first_conn_rx) = oneshot::channel();
     tokio::spawn(setup_persistent_websocket(
         url.into(),
-        msg_tx.clone(),
+        msg_tx_in,
+        msg_rx_out,
         first_conn_tx,
     ));
     if let Some(first_conn_error) = first_conn_rx.await? {
         return Err(Error::Tungstenite(first_conn_error));
     }
-    Ok((msg_tx, msg_rx))
+    Ok((msg_tx_out, msg_rx_in))
 }
 
 async fn setup_persistent_websocket(
     url: Url,
-    msg_tx: broadcast::Sender<Message>,
+    mut msg_tx_in: broadcast::Sender<Message>,
+    mut msg_rx_out: mpsc::Receiver<Message>,
     first_conn_tx: oneshot::Sender<Option<WsError>>,
 ) {
     let mut connection_count = 0;
     let mut first_conn_tx = Some(first_conn_tx);
     loop {
         info!("connecting to {url}");
-        let msg_tx = msg_tx.clone();
-        let msg_rx = msg_tx.subscribe();
-        let result =
-            listen_for_persistent_ws_messages(url.clone(), msg_tx, msg_rx, &mut first_conn_tx)
-                .await;
+        let result = listen_for_persistent_ws_messages(
+            url.clone(),
+            &mut msg_tx_in,
+            &mut msg_rx_out,
+            &mut first_conn_tx,
+        )
+        .await;
         if let Err(e) = result {
             error!("error during ws connection: {e}");
         }
@@ -77,8 +82,8 @@ async fn setup_persistent_websocket(
 
 async fn listen_for_persistent_ws_messages(
     url: Url,
-    mut msg_tx: broadcast::Sender<Message>,
-    mut msg_rx: broadcast::Receiver<Message>,
+    msg_tx_in: &mut broadcast::Sender<Message>,
+    msg_rx_out: &mut mpsc::Receiver<Message>,
     first_conn_tx: &mut Option<oneshot::Sender<Option<WsError>>>,
 ) -> Result<(), Error> {
     let connection_result = connect_async(url).await;
@@ -100,13 +105,13 @@ async fn listen_for_persistent_ws_messages(
     loop {
         tokio::select! {
             Some(incoming_msg) = ws_rx.next() => {
-                let should_close = handle_message(incoming_msg, &mut ws_tx, &mut msg_tx).await?;
+                let should_close = handle_message(incoming_msg, &mut ws_tx, msg_tx_in).await?;
                 if should_close {
                     break;
                 }
             },
-            outgoing_msg = msg_rx.recv() => {
-                ws_tx.send(outgoing_msg?).await?;
+            Some(outgoing_msg) = msg_rx_out.recv() => {
+                ws_tx.send(outgoing_msg).await?;
             }
         }
     }
@@ -116,7 +121,7 @@ async fn listen_for_persistent_ws_messages(
 async fn handle_message(
     message: Result<Message, WsError>,
     ws_tx: &mut WsWrite,
-    msg_tx: &mut broadcast::Sender<Message>,
+    msg_tx_in: &mut broadcast::Sender<Message>,
 ) -> Result<bool, Error> {
     let message = match message {
         Ok(m) => m,
@@ -139,7 +144,7 @@ async fn handle_message(
         }
         _ => {}
     }
-    msg_tx.send(message)?;
+    msg_tx_in.send(message)?;
     Ok(false)
 }
 
