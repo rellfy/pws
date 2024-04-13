@@ -1,6 +1,6 @@
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
-use log::{error, info, trace};
+use log::{error, info};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpStream;
