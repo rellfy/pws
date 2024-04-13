@@ -24,12 +24,21 @@ async fn main() {
         },
         async move {
             while let Ok(msg) = rx.recv().await {
-                let Message::Text(msg) = msg else {
-                    continue;
-                };
-                println!("received: {msg}");
-                if &msg == "hello again" {
-                    std::process::exit(0);
+                match msg {
+                    Message::Text(msg) => {
+                        println!("received: {msg}");
+                        if &msg == "hello again" {
+                            println!("exiting");
+                            std::process::exit(0);
+                        }
+                    }
+                    Message::ConnectionOpened => {
+                        println!("connection opened");
+                    }
+                    Message::ConnectionClosed => {
+                        println!("connection closed");
+                    }
+                    _ => {}
                 }
             }
         }

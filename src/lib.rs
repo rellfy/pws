@@ -8,7 +8,9 @@ use tokio::sync::broadcast::error::{RecvError as BroadcastRecvError, SendError};
 use tokio::sync::oneshot::error::RecvError as OneshotRecvError;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinError;
-pub use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+pub use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 pub use url::Url;
 
@@ -16,7 +18,7 @@ const INITIAL_BACKOFF_MILLIS: u64 = 100;
 const MAX_BACKOFF_MILLIS: u64 = 5 * 60 * 1000;
 const CHANNEL_CAPACITY: usize = 32;
 
-type WsWrite = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+type WsWrite = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, TungsteniteMessage>;
 type WsError = tokio_tungstenite::tungstenite::Error;
 
 #[derive(Debug, Error)]
@@ -35,6 +37,26 @@ pub enum Error {
 
 pub type WsMessageSender = mpsc::Sender<Message>;
 pub type WsMessageReceiver = broadcast::Receiver<Message>;
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum Message {
+    Text(String),
+    Binary(Vec<u8>),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+    Close(Option<CloseFrame<'static>>),
+    Frame(Frame),
+    /// A message to notify that the connection was opened.
+    /// Note that this cannot be sent, it is received only.
+    /// This variant is only part of the Pws crate and not of
+    /// tungstenite.
+    ConnectionOpened,
+    /// A message to notify that the connection was closed.
+    /// Note that this cannot be sent, it is received only.
+    /// This variant is only part of the Pws crate and not of
+    /// tungstenite.
+    ConnectionClosed,
+}
 
 pub async fn connect_persistent_websocket_async(
     url: Url,
@@ -102,6 +124,7 @@ async fn listen_for_persistent_ws_messages(
         }
     };
     let (mut ws_tx, mut ws_rx) = socket.split();
+    msg_tx_in.send(Message::ConnectionOpened)?;
     loop {
         tokio::select! {
             Some(incoming_msg) = ws_rx.next() => {
@@ -111,15 +134,19 @@ async fn listen_for_persistent_ws_messages(
                 }
             },
             Some(outgoing_msg) = msg_rx_out.recv() => {
+                let Some(outgoing_msg) = outgoing_msg.to_tungstenite() else {
+                    continue;
+                };
                 ws_tx.send(outgoing_msg).await?;
             }
         }
     }
+    msg_tx_in.send(Message::ConnectionClosed)?;
     Ok(())
 }
 
 async fn handle_message(
-    message: Result<Message, WsError>,
+    message: Result<TungsteniteMessage, WsError>,
     ws_tx: &mut WsWrite,
     msg_tx_in: &mut broadcast::Sender<Message>,
 ) -> Result<bool, Error> {
@@ -131,20 +158,20 @@ async fn handle_message(
         }
     };
     match message {
-        Message::Ping(_) => {
+        TungsteniteMessage::Ping(_) => {
             #[cfg(feature = "pong")]
-            if let Err(e) = ws_tx.send(Message::Pong(vec![])).await {
+            if let Err(e) = ws_tx.send(TungsteniteMessage::Pong(vec![])).await {
                 error!("error sending pong: {e}");
             }
             return Ok(true);
         }
-        Message::Close(frame) => {
+        TungsteniteMessage::Close(frame) => {
             info!("received socket close signal: {:#?}", frame);
             return Ok(true);
         }
         _ => {}
     }
-    msg_tx_in.send(message)?;
+    msg_tx_in.send(message.into())?;
     Ok(false)
 }
 
@@ -180,5 +207,33 @@ impl From<JoinError> for Error {
 impl From<SendError<Message>> for Error {
     fn from(e: SendError<Message>) -> Self {
         Self::Send(e)
+    }
+}
+
+impl Message {
+    fn to_tungstenite(self) -> Option<TungsteniteMessage> {
+        match self {
+            Message::Text(v) => Some(TungsteniteMessage::Text(v)),
+            Message::Binary(v) => Some(TungsteniteMessage::Binary(v)),
+            Message::Ping(v) => Some(TungsteniteMessage::Ping(v)),
+            Message::Pong(v) => Some(TungsteniteMessage::Pong(v)),
+            Message::Close(v) => Some(TungsteniteMessage::Close(v)),
+            Message::Frame(v) => Some(TungsteniteMessage::Frame(v)),
+            Message::ConnectionOpened => None,
+            Message::ConnectionClosed => None,
+        }
+    }
+}
+
+impl From<TungsteniteMessage> for Message {
+    fn from(message: TungsteniteMessage) -> Self {
+        match message {
+            TungsteniteMessage::Text(v) => Message::Text(v),
+            TungsteniteMessage::Binary(v) => Message::Binary(v),
+            TungsteniteMessage::Ping(v) => Message::Ping(v),
+            TungsteniteMessage::Pong(v) => Message::Pong(v),
+            TungsteniteMessage::Close(v) => Message::Close(v),
+            TungsteniteMessage::Frame(v) => Message::Frame(v),
+        }
     }
 }
