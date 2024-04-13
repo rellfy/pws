@@ -14,6 +14,7 @@ use url::Url;
 
 const INITIAL_BACKOFF_MILLIS: u64 = 100;
 const MAX_BACKOFF_MILLIS: u64 = 5 * 60 * 1000;
+const CHANNEL_CAPACITY: usize = 32;
 
 type WsWrite = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WsError = tokio_tungstenite::tungstenite::Error;
@@ -32,59 +33,26 @@ pub enum Error {
     Send(SendError<Message>),
 }
 
-#[derive(Clone)]
-pub struct Pws {
-    msg_tx: broadcast::Sender<Message>,
-}
+pub type WsMessageSender = broadcast::Sender<Message>;
+pub type WsMessageReceiver = broadcast::Receiver<Message>;
 
-pub struct PwsReader {
-    msg_rx: broadcast::Receiver<Message>,
-}
-
-impl Pws {
-    pub async fn connect(url: Url) -> Result<Self, Error> {
-        let (msg_tx, _) = broadcast::channel::<Message>(32);
-        let (first_conn_tx, first_conn_rx) = oneshot::channel();
-        tokio::spawn(setup_persistent_websocket(
-            url,
-            msg_tx.clone(),
-            first_conn_tx,
-        ));
-        if let Some(first_conn_error) = first_conn_rx.await? {
-            return Err(Error::Tungstenite(first_conn_error));
-        }
-        Ok(Self { msg_tx })
+pub async fn connect_persistent_websocket_async<T>(
+    url: T,
+) -> Result<(WsMessageSender, WsMessageReceiver), Error>
+where
+    T: Into<Url>,
+{
+    let (msg_tx, msg_rx) = broadcast::channel::<Message>(CHANNEL_CAPACITY);
+    let (first_conn_tx, first_conn_rx) = oneshot::channel();
+    tokio::spawn(setup_persistent_websocket(
+        url.into(),
+        msg_tx.clone(),
+        first_conn_tx,
+    ));
+    if let Some(first_conn_error) = first_conn_rx.await? {
+        return Err(Error::Tungstenite(first_conn_error));
     }
-
-    pub fn reader(&self) -> PwsReader {
-        let msg_rx = self.msg_tx.subscribe();
-        PwsReader { msg_rx }
-    }
-}
-
-impl PwsReader {
-    pub async fn recv(&mut self) -> Result<Message, BroadcastRecvError> {
-        self.msg_rx.recv().await
-    }
-
-    pub fn blocking_recv(&mut self) -> Result<Message, BroadcastRecvError> {
-        self.msg_rx.blocking_recv()
-    }
-
-    pub fn len(&self) -> usize {
-        self.msg_rx.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.msg_rx.is_empty()
-    }
-}
-
-impl Clone for PwsReader {
-    fn clone(&self) -> Self {
-        let msg_rx = self.msg_rx.resubscribe();
-        Self { msg_rx }
-    }
+    Ok((msg_tx, msg_rx))
 }
 
 async fn setup_persistent_websocket(
