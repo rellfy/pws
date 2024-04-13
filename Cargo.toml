@@ -1,6 +1,6 @@
 [package]
 name = "pws"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["Lorenzo Fontoura <lorenzo@nioel.com>"]
 edition = "2021"
 license = "MIT"
