@@ -8,3 +8,15 @@ homepage = "https://github.com/rellfy/pws"
 repository = "https://github.com/rellfy/pws"
 description = "Persistent Websocket connection for tokio-tungstenite"
 readme = "README.md"
+
+[features]
+native-tls = ["tokio-tungstenite/native-tls"]
+native-tls-vendored = ["tokio-tungstenite/native-tls-vendored"]
+rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
+rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
+
+[dependencies]
+tokio-tungstenite = { version = "0.21", default-features = false, features = [] }
+futures = "0.3.28"
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
