@@ -1,6 +1,6 @@
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
-use log::{error, info};
+use log::{error, info, trace};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -130,6 +130,7 @@ async fn listen_for_persistent_ws_messages(
             Some(incoming_msg) = ws_rx.next() => {
                 let should_close = handle_message(incoming_msg, &mut ws_tx, msg_tx_in).await?;
                 if should_close {
+                    info!("closing connection");
                     break;
                 }
             },
@@ -163,7 +164,7 @@ async fn handle_message(
             if let Err(e) = ws_tx.send(TungsteniteMessage::Pong(vec![])).await {
                 error!("error sending pong: {e}");
             }
-            return Ok(true);
+            return Ok(false);
         }
         TungsteniteMessage::Close(frame) => {
             info!("received socket close signal: {:#?}", frame);
