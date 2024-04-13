@@ -1,0 +1,10 @@
+[package]
+name = "pws"
+version = "0.0.0"
+authors = ["Lorenzo Fontoura <lorenzo@nioel.com>"]
+edition = "2021"
+license = "MIT"
+homepage = "https://github.com/rellfy/pws"
+repository = "https://github.com/rellfy/pws"
+description = "Persistent Websocket connection for tokio-tungstenite"
+readme = "README.md"
