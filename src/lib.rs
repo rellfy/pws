@@ -1,4 +1,4 @@
-use futures::stream::SplitSink;
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use log::{error, info};
 use std::time::Duration;
@@ -19,6 +19,7 @@ const MAX_BACKOFF_MILLIS: u64 = 5 * 60 * 1000;
 const CHANNEL_CAPACITY: usize = 32;
 
 type WsWrite = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, TungsteniteMessage>;
+type WsRead = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 type WsError = tokio_tungstenite::tungstenite::Error;
 
 #[derive(Debug, Error)]
@@ -125,10 +126,22 @@ async fn listen_for_persistent_ws_messages(
     };
     let (mut ws_tx, mut ws_rx) = socket.split();
     msg_tx_in.send(Message::ConnectionOpened)?;
+    let result = process_connection(&mut ws_tx, &mut ws_rx, msg_tx_in, msg_rx_out).await;
+    msg_tx_in.send(Message::ConnectionClosed)?;
+    result?;
+    Ok(())
+}
+
+async fn process_connection(
+    ws_tx: &mut WsWrite,
+    ws_rx: &mut WsRead,
+    msg_tx_in: &mut broadcast::Sender<Message>,
+    msg_rx_out: &mut mpsc::Receiver<Message>,
+) -> Result<(), Error> {
     loop {
         tokio::select! {
             Some(incoming_msg) = ws_rx.next() => {
-                let should_close = handle_message(incoming_msg, &mut ws_tx, msg_tx_in).await?;
+                let should_close = handle_incoming_message(incoming_msg, ws_tx, msg_tx_in).await?;
                 if should_close {
                     info!("closing connection");
                     break;
@@ -142,11 +155,10 @@ async fn listen_for_persistent_ws_messages(
             }
         }
     }
-    msg_tx_in.send(Message::ConnectionClosed)?;
     Ok(())
 }
 
-async fn handle_message(
+async fn handle_incoming_message(
     message: Result<TungsteniteMessage, WsError>,
     ws_tx: &mut WsWrite,
     msg_tx_in: &mut broadcast::Sender<Message>,
