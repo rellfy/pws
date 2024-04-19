@@ -10,6 +10,7 @@ async fn main() {
         match msg {
             Message::Text(msg) => {
                 println!("received: {msg}");
+                // Simulate a connection close.
                 tx.send(Message::Close(None)).await.unwrap();
             }
             Message::ConnectionOpened => {
@@ -21,6 +22,7 @@ async fn main() {
                 println!("connection closed");
                 close_count += 1;
                 if close_count >= 2 {
+                    // Terminate the persistent connection.
                     break;
                 }
             }
